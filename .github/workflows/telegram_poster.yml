@@ -2,8 +2,8 @@ name: Auto Post Football & Cricket to Telegram
 
 on:
   schedule:
-    # Runs automatically every 15 minutes
-    - cron: '*/15 * * * *'
+    # Runs automatically once every 24 hours at 8:00 PM Malaysia time (12:00 UTC)
+    - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
       force_repost:
@@ -36,6 +36,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install requests tzdata
+
+      - name: Run Verification Tests
+        run: python test_poster.py
 
       - name: Run Telegram Match Poster
         env:
