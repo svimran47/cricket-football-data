@@ -30,7 +30,7 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-DISCORD_WEBHOOK_URL = (os.getenv("DISCORD_WEBHOOK_URL") or "https://discord.com/api/webhooks/1557489601457815662/Fe0h0jqmAeVBxtpoShSUZxNHUwd2foaMKe1IwBFIlmq9LBI6HIzHMaGNktbLwY1Yson7").strip().strip('"').strip("'")
+DISCORD_WEBHOOK_URL = (os.getenv("DISCORD_WEBHOOK_URL") or "").strip().strip('"').strip("'")
 
 # Known clubs belonging to the top European leagues for cross-referencing and fallback UEFA detection
 TOP_EUROPEAN_CLUBS = {
