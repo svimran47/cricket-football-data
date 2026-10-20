@@ -15,15 +15,16 @@ HISTORY_FILE = "posted_matches.json"
 SOURCE_TZ = ZoneInfo(os.getenv("SOURCE_TIMEZONE", "Europe/London"))
 MYT_TZ = ZoneInfo("Asia/Kuala_Lumpur")
 
-# Six capital-city timezones retained for every fixture
-DISPLAY_TIMEZONES = [
-    ("🇧🇩", "Dhaka", "Asia/Dhaka"),
-    ("🇮🇳", "New Delhi", "Asia/Kolkata"),
-    ("🇺🇸", "Washington DC", "America/New_York"),
-    ("🇮🇩", "Jakarta", "Asia/Jakarta"),
-    ("🇳🇬", "Abuja", "Africa/Lagos"),
-    ("🇸🇬", "Singapore", "Asia/Singapore"),
+# Six capital-city timezones with approved 3-letter codes
+TIMEZONE_CONFIG = [
+    ("DHA", "Asia/Dhaka"),
+    ("DEL", "Asia/Kolkata"),
+    ("WDC", "America/New_York"),
+    ("JKT", "Asia/Jakarta"),
+    ("ABJ", "Africa/Lagos"),
+    ("SGT", "Asia/Singapore"),
 ]
+DISPLAY_TIMEZONES = TIMEZONE_CONFIG
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -307,6 +308,12 @@ def is_eligible_football_match(match, upstream_lookup=None):
     raw_blob = f"{event_name} {comp} {mid} {slug} {' '.join(hints)}"
     norm = normalize_text(raw_blob)
 
+    # Exclude studio shows, highlights, and magazine programs (must be an actual match)
+    if not (home and away) and " vs " not in event_name.lower() and " - " not in event_name.lower():
+        return None, False
+    if re.search(r'\b(show|highlights|replay|preview|magazine|wrap up|wrap-up|post match|pre match)\b', event_name.lower()):
+        return None, False
+
     # 1. EXCLUSIONS FIRST: Youth, reserves, academies, amateurs
     if re.search(r'\b(u\d{2}|u-\d{2}|under \d{2}|youth|reserves|academy|amateur|women|feminin)\b', norm):
         return None, False
@@ -430,87 +437,95 @@ def is_eligible_football_match(match, upstream_lookup=None):
 
 # ---------------------------------------------------------------- TIMEZONE & FORMATTING ---
 
-def format_local_time(dt):
-    """Format datetime as e.g. '10:00 PM'."""
-    hour = dt.strftime('%I').lstrip('0')
-    minute = dt.strftime('%M')
-    ampm = dt.strftime('%p')
-    return f"{hour}:{minute} {ampm}"
+def format_time_24h(dt):
+    """Format datetime as 24-hour clock e.g. '00:30', '14:45'."""
+    return dt.strftime("%H:%M")
 
-def format_match_card(match, comp_title, is_live, base_date, is_html=True):
+format_local_time = format_time_24h
+
+def get_day_suffix(dt, base_date):
+    """Return short day suffix (e.g. ' Tue') when date differs from base schedule date."""
+    if base_date and dt.date() != base_date:
+        return f" {dt.strftime('%a')}"
+    return ""
+
+def format_match_card(match, is_live=False, base_date=None, is_html=True):
     """
-    Format a single match block with all 7 timezones and compact layout.
+    Format a single match block in ultra-compact scoreboard layout:
+    <b>Matchup</b> · <code>HH:MM MYT</code>
+    <code>DHA ... · DEL ... · WDC ...</code>
+    <code>JKT ... · ABJ ... · SGT ...</code>
+    <a href="URL">▶ Watch live in HD</a>
     """
     event_name = (match.get("eventName") or f"{match.get('homeTeam', '')} vs {match.get('awayTeam', '')}").strip()
     kickoff_dt = match["_kickoff_dt"]
     watch_url = get_watch_url(match)
 
-    status_dot = "🔴" if is_live else "⚪"
     safe_name = html.escape(event_name) if is_html else event_name
 
     myt_dt = kickoff_dt.astimezone(MYT_TZ)
-    myt_day = f" ({myt_dt.strftime('%a')})" if myt_dt.date() != base_date else ""
-    myt_line = f"🇲🇾 MYT {format_local_time(myt_dt)}{myt_day}"
+    myt_day = get_day_suffix(myt_dt, base_date)
+    myt_str = f"{format_time_24h(myt_dt)} MYT{myt_day}"
 
-    # Build 6 city times
-    city_times = {}
-    for flag, label, iana in DISPLAY_TIMEZONES:
-        local_dt = kickoff_dt.astimezone(ZoneInfo(iana))
-        suffix = ""
-        if local_dt.date() != base_date:
-            suffix = f" ({local_dt.strftime('%a')})"
-        elif myt_dt.date() != base_date and local_dt.date() != myt_dt.date():
-            suffix = f" ({local_dt.strftime('%a')})"
-        city_times[label] = f"{flag} {label} {format_local_time(local_dt)}{suffix}"
+    times = {}
+    for code, iana in TIMEZONE_CONFIG:
+        city_dt = kickoff_dt.astimezone(ZoneInfo(iana))
+        suffix = get_day_suffix(city_dt, base_date)
+        times[code] = f"{code} {format_time_24h(city_dt)}{suffix}"
 
-    lines = [
-        f"{status_dot} {safe_name}",
-        myt_line,
-        f"{city_times['Dhaka']} · {city_times['New Delhi']}",
-        f"{city_times['Washington DC']}",
-        f"{city_times['Jakarta']} · {city_times['Abuja']}",
-        f"{city_times['Singapore']}",
-    ]
+    line1 = f"{times['DHA']} · {times['DEL']} · {times['WDC']}"
+    line2 = f"{times['JKT']} · {times['ABJ']} · {times['SGT']}"
 
     if is_html:
-        lines.append(f"▶ <a href=\"{watch_url}\">WATCH LIVE IN HD</a>")
+        return (
+            f"<b>{safe_name}</b> · <code>{myt_str}</code>\n"
+            f"<code>{line1}</code>\n"
+            f"<code>{line2}</code>\n"
+            f"<a href=\"{watch_url}\">▶ Watch live in HD</a>"
+        )
     else:
-        lines.append(f"▶ [WATCH LIVE IN HD]({watch_url})")
-
-    return "\n".join(lines)
+        return (
+            f"**{safe_name}** · `{myt_str}`\n"
+            f"`{line1}`\n"
+            f"`{line2}`\n"
+            f"[▶ Watch live in HD]({watch_url})"
+        )
 
 def build_combined_post(matches_by_status, base_date, is_html=True):
     """
-    Constructs the complete text of the daily schedule post.
+    Constructs the ultra-compact daily schedule post:
+    <b>⚽ SPORTZFYPLAY · DAILY FIXTURES</b>
+    <code>TUE 20 OCT · MYT</code>
+
+    <b>COMPETITION</b>
+    ...
     """
-    sep = "━━━━━━━━━━━━━━━━━━━━"
-    day_str = base_date.strftime("%A, %d %B").upper()
+    date_line = base_date.strftime("%a %d %b").upper() + " · MYT"
+    if is_html:
+        header = f"<b>⚽ SPORTZFYPLAY · DAILY FIXTURES</b>\n<code>{date_line}</code>"
+        footer = (
+            "<code>MYT Malaysia · DHA Dhaka · DEL New Delhi</code>\n"
+            "<code>WDC Washington DC · JKT Jakarta · ABJ Abuja · SGT Singapore</code>"
+        )
+    else:
+        header = f"**⚽ SPORTZFYPLAY · DAILY FIXTURES**\n`{date_line}`"
+        footer = (
+            "`MYT Malaysia · DHA Dhaka · DEL New Delhi`\n"
+            "`WDC Washington DC · JKT Jakarta · ABJ Abuja · SGT Singapore`"
+        )
 
-    header_lines = [
-        sep,
-        "⚽ SPORTZFYPLAY | DAILY FOOTBALL",
-        f"📅 {day_str}",
-        "🕗 Published daily at 8:00 PM MYT",
-    ]
+    sections = []
 
-    body_sections = []
-
-    # 1. LIVE NOW SECTION (if any live matches)
+    # 1. LIVE NOW
     live_matches = matches_by_status.get("LIVE", [])
     if live_matches:
-        live_block = ["\n🔴 LIVE NOW"]
-        # Group live matches by competition
-        live_groups = {}
+        live_block = ["<b>LIVE NOW</b>" if is_html else "**LIVE NOW**"]
+        live_matches.sort(key=lambda x: x["_kickoff_dt"])
         for m in live_matches:
-            live_groups.setdefault(m["_comp"], []).append(m)
-        for comp, g_matches in live_groups.items():
-            live_block.append(f"\n🏆 {comp}\n")
-            for m in g_matches:
-                live_block.append(format_match_card(m, comp, is_live=True, base_date=base_date, is_html=is_html))
-                live_block.append("")  # match spacer
-        body_sections.append("\n".join(live_block).strip())
+            live_block.append(format_match_card(m, is_live=True, base_date=base_date, is_html=is_html))
+        sections.append("\n\n".join(live_block))
 
-    # 2. UPCOMING SECTION (grouped by competition)
+    # 2. UPCOMING
     upcoming_matches = matches_by_status.get("UPCOMING", [])
     if upcoming_matches:
         comp_groups = {}
@@ -518,21 +533,16 @@ def build_combined_post(matches_by_status, base_date, is_html=True):
             comp_groups.setdefault(m["_comp"], []).append(m)
 
         for comp, g_matches in comp_groups.items():
-            comp_block = [f"\n🏆 {comp}\n"]
-            # Sort chronologically
+            comp_heading = f"<b>{comp}</b>" if is_html else f"**{comp}**"
             g_matches.sort(key=lambda x: x["_kickoff_dt"])
-            for m in g_matches:
-                comp_block.append(format_match_card(m, comp, is_live=False, base_date=base_date, is_html=is_html))
-                comp_block.append("")
-            body_sections.append("\n".join(comp_block).strip())
+            cards = [format_match_card(m, is_live=False, base_date=base_date, is_html=is_html) for m in g_matches]
+            sections.append(comp_heading + "\n" + "\n\n".join(cards))
 
     if not live_matches and not upcoming_matches:
-        body_sections.append("\nNo qualifying football fixtures scheduled for today.")
+        sections.append("No qualifying fixtures scheduled.")
 
-    footer = f"\n{sep}\nFree Live Sports | SportzfyPlay"
-
-    full_message = "\n\n".join(header_lines) + "\n\n" + "\n\n".join(body_sections) + footer
-    return full_message
+    body = "\n\n".join(sections)
+    return f"{header}\n\n{body}\n\n{footer}"
 
 def chunk_post_message(message, max_chars=3900):
     """

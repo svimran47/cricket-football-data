@@ -115,33 +115,33 @@ class TestTelegramPoster(unittest.TestCase):
     def test_timezone_formatting_and_rollover(self):
         base_date = date(2026, 10, 19) # Monday
 
-        # Match 1: 10:00 PM MYT Monday (14:00 UTC)
-        # 14:00 UTC -> MYT 10:00 PM (same day), New York 10:00 AM (same day EDT UTC-4)
+        # Match 1: 22:00 MYT Monday (14:00 UTC)
+        # 14:00 UTC -> MYT 22:00 (same day), New York 10:00 (same day EDT UTC-4)
         dt1 = datetime(2026, 10, 19, 14, 0, tzinfo=ZoneInfo("UTC"))
         match1 = {
             "eventName": "Arsenal vs Chelsea",
             "_kickoff_dt": dt1,
             "slug": "test-match-1"
         }
-        card1 = format_match_card(match1, "PREMIER LEAGUE", is_live=False, base_date=base_date, is_html=True)
-        self.assertIn("⚪ Arsenal vs Chelsea", card1)
-        self.assertIn("🇲🇾 MYT 10:00 PM", card1)
-        self.assertIn("🇺🇸 Washington DC 10:00 AM", card1)
-        self.assertIn("▶ <a href=\"https://sportzfyplay.com/watch?v=test-match-1\">WATCH LIVE IN HD</a>", card1)
-        # Should not have rollover on same day for MYT
-        self.assertNotIn("MYT 10:00 PM (", card1)
+        card1 = format_match_card(match1, is_live=False, base_date=base_date, is_html=True)
+        self.assertIn("<b>Arsenal vs Chelsea</b> · <code>22:00 MYT</code>", card1)
+        self.assertIn("<code>DHA 20:00 · DEL 19:30 · WDC 10:00</code>", card1)
+        self.assertIn("<code>JKT 21:00 · ABJ 15:00 · SGT 22:00</code>", card1)
+        self.assertIn("<a href=\"https://sportzfyplay.com/watch?v=test-match-1\">▶ Watch live in HD</a>", card1)
+        # No city flags or fake crests
+        self.assertNotIn("⚪", card1)
+        self.assertNotIn("🇲🇾", card1)
 
-        # Match 2: 2:00 AM MYT Tuesday (18:00 UTC Monday)
-        # MYT is Tuesday 2:00 AM -> rollover suffix (Tue)
-        # New York is Monday 2:00 PM -> same day Monday
+        # Match 2: 02:00 MYT Tuesday (18:00 UTC Monday)
+        # MYT is Tuesday 02:00 -> rollover suffix Tue
         dt2 = datetime(2026, 10, 19, 18, 0, tzinfo=ZoneInfo("UTC"))
         match2 = {
             "eventName": "Real Madrid vs Bayern Munich",
             "_kickoff_dt": dt2,
             "slug": "test-match-2"
         }
-        card2 = format_match_card(match2, "UEFA CHAMPIONS LEAGUE", is_live=False, base_date=base_date, is_html=True)
-        self.assertIn("🇲🇾 MYT 2:00 AM (Tue)", card2)
+        card2 = format_match_card(match2, is_live=False, base_date=base_date, is_html=True)
+        self.assertIn("<b>Real Madrid vs Bayern Munich</b> · <code>02:00 MYT Tue</code>", card2)
 
     def test_combined_post_structure(self):
         base_date = date(2026, 10, 19)
@@ -155,20 +155,24 @@ class TestTelegramPoster(unittest.TestCase):
 
         # Upcoming only
         post = build_combined_post({"LIVE": [], "UPCOMING": [match]}, base_date, is_html=True)
-        self.assertIn("⚽ SPORTZFYPLAY | DAILY FOOTBALL", post)
-        self.assertIn("📅 MONDAY, 19 OCTOBER", post)
-        self.assertIn("🕗 Published daily at 8:00 PM MYT", post)
-        self.assertIn("🏆 PREMIER LEAGUE", post)
-        self.assertIn("Free Live Sports | SportzfyPlay", post)
-        self.assertNotIn("🔴 LIVE NOW", post)
+        self.assertIn("<b>⚽ SPORTZFYPLAY · DAILY FIXTURES</b>", post)
+        self.assertIn("<code>MON 19 OCT · MYT</code>", post)
+        self.assertIn("<b>PREMIER LEAGUE</b>", post)
+        self.assertIn("<code>MYT Malaysia · DHA Dhaka · DEL New Delhi</code>", post)
+        self.assertIn("<code>WDC Washington DC · JKT Jakarta · ABJ Abuja · SGT Singapore</code>", post)
+        # Ensure rules/separators and verbose lines are absent
+        self.assertNotIn("━━━━━━━━━━━━━━━━━━━━", post)
+        self.assertNotIn("Published daily at 8:00 PM MYT", post)
+        self.assertNotIn("Free Live Sports", post)
+        self.assertNotIn("<b>LIVE NOW</b>", post)
 
         # With live match
         post_live = build_combined_post({"LIVE": [match], "UPCOMING": []}, base_date, is_html=True)
-        self.assertIn("🔴 LIVE NOW", post_live)
+        self.assertIn("<b>LIVE NOW</b>", post_live)
 
         # Empty schedule
         post_empty = build_combined_post({"LIVE": [], "UPCOMING": []}, base_date, is_html=True)
-        self.assertIn("No qualifying football fixtures scheduled for today.", post_empty)
+        self.assertIn("No qualifying fixtures scheduled.", post_empty)
 
     def test_chunking(self):
         short_msg = "Short message"
