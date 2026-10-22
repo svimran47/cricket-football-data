@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import json
 import time
@@ -6,6 +7,12 @@ import html
 import requests
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@sportzfyplay")
@@ -32,6 +39,8 @@ HEADERS = {
 }
 
 DISCORD_WEBHOOK_URL = (os.getenv("DISCORD_WEBHOOK_URL") or "").strip().strip('"').strip("'")
+DISCORD_BOT_TOKEN = (os.getenv("DISCORD_BOT_TOKEN") or "").strip().strip('"').strip("'")
+DISCORD_SCHEDULE_CHANNEL_ID = (os.getenv("DISCORD_SCHEDULE_CHANNEL_ID") or os.getenv("DISCORD_CHANNEL_ID") or "1522963317918793951").strip().strip('"').strip("'")
 
 # Known clubs belonging to the top European leagues for cross-referencing and fallback UEFA detection
 TOP_EUROPEAN_CLUBS = {
@@ -139,14 +148,56 @@ def send_telegram_request(endpoint, payload):
         print(f"❌ Request Exception on {endpoint}: {e}")
         return False
 
-def send_discord_webhook(payload, retries=3):
-    """POST to Discord webhook, honouring rate limits."""
+def send_discord_message(content, retries=3):
+    """
+    Publish a message chunk to Discord either via DISCORD_WEBHOOK_URL
+    or via DISCORD_BOT_TOKEN to DISCORD_SCHEDULE_CHANNEL_ID.
+    Honours Discord rate limits (HTTP 429).
+    """
+    token = DISCORD_BOT_TOKEN
+    if token.lower().startswith("bot "):
+        token = token[4:].strip()
+
+    webhook_url = DISCORD_WEBHOOK_URL
+    channel_id = DISCORD_SCHEDULE_CHANNEL_ID
+
+    use_webhook = bool(webhook_url and webhook_url.startswith("https://"))
+    use_bot = bool(token and channel_id)
+
+    if not use_webhook and not use_bot:
+        print("⚠️ [Discord] Neither DISCORD_WEBHOOK_URL nor DISCORD_BOT_TOKEN is set. Skipping Discord post.")
+        return False
+
+    if use_webhook:
+        url = f"{webhook_url}?wait=true"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "SportzfyBot (https://github.com/svimran47/cricket-football-data, 1.0.0)"
+        }
+        payload = {
+            "username": "SportzfyPlay",
+            "content": content,
+            "allowed_mentions": {"parse": []}
+        }
+    else:
+        url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+        headers = {
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "SportzfyBot (https://github.com/svimran47/cricket-football-data, 1.0.0)"
+        }
+        payload = {
+            "content": content,
+            "allowed_mentions": {"parse": []}
+        }
+
     for attempt in range(retries):
         try:
-            resp = requests.post(f"{DISCORD_WEBHOOK_URL}?wait=true", json=payload, timeout=25)
+            resp = requests.post(url, json=payload, headers=headers, timeout=25)
         except Exception as e:
             print(f"❌ Discord request exception: {e}")
             return False
+
         if resp.status_code == 429:
             try:
                 wait = float(resp.json().get("retry_after", 2))
@@ -155,11 +206,19 @@ def send_discord_webhook(payload, retries=3):
             print(f"⏳ Discord rate limited, retrying in {wait:.1f}s")
             time.sleep(wait + 0.5)
             continue
+
         if resp.ok:
             return True
+
         print(f"❌ Discord API Error: {resp.status_code} - {resp.text}")
         return False
+
     return False
+
+def send_discord_webhook(payload, retries=3):
+    """Backwards-compatible wrapper."""
+    content = payload.get("content", "") if isinstance(payload, dict) else str(payload)
+    return send_discord_message(content, retries=retries)
 
 # ---------------------------------------------------------------- HISTORY ---
 
@@ -690,17 +749,21 @@ def main():
         print(f"ℹ️ [Telegram] Daily post for {base_date.isoformat()} already published (use FORCE_REPOST=true to override).")
 
     # 7. Publish to Discord
-    discord_enabled = DISCORD_WEBHOOK_URL.startswith("https://")
-    if discord_enabled and (FORCE_REPOST or discord_post_key not in posted):
-        print(f"🚀 [Discord] Publishing combined football schedule...")
+    clean_bot_token = DISCORD_BOT_TOKEN
+    if clean_bot_token.lower().startswith("bot "):
+        clean_bot_token = clean_bot_token[4:].strip()
+
+    discord_configured = bool(DISCORD_WEBHOOK_URL.startswith("https://") or (clean_bot_token and DISCORD_SCHEDULE_CHANNEL_ID))
+
+    if not discord_configured:
+        print("ℹ️ [Discord] Neither DISCORD_WEBHOOK_URL nor DISCORD_BOT_TOKEN is configured. Skipping Discord schedule post.")
+    elif FORCE_REPOST or discord_post_key not in posted:
+        mode_desc = "webhook" if DISCORD_WEBHOOK_URL.startswith("https://") else f"bot token (channel {DISCORD_SCHEDULE_CHANNEL_ID})"
+        print(f"🚀 [Discord] Publishing combined football schedule via {mode_desc}...")
         discord_chunks = chunk_post_message(discord_text, max_chars=1900)
         d_success = True
         for chunk in discord_chunks:
-            res = send_discord_webhook({
-                "username": "SportzfyPlay",
-                "content": chunk,
-                "allowed_mentions": {"parse": []}
-            })
+            res = send_discord_message(chunk)
             if not res:
                 d_success = False
             time.sleep(1)
@@ -710,6 +773,8 @@ def main():
             print(f"✅ [Discord] Published daily schedule post successfully.")
         else:
             print(f"❌ [Discord] Failed to publish daily post to Discord.")
+    else:
+        print(f"ℹ️ [Discord] Daily post for {base_date.isoformat()} already published (use FORCE_REPOST=true to override).")
 
     save_posted(posted)
 

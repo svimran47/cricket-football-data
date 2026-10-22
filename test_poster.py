@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch, MagicMock
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from telegram_poster import (
@@ -7,6 +8,8 @@ from telegram_poster import (
     build_combined_post,
     chunk_post_message,
     format_local_time,
+    send_discord_message,
+    send_discord_webhook,
     MYT_TZ
 )
 
@@ -185,6 +188,71 @@ class TestTelegramPoster(unittest.TestCase):
         reconstructed = "\n".join(chunks)
         for i in range(100):
             self.assertIn(f"Line {i} content text", reconstructed)
+
+    @patch("telegram_poster.requests.post")
+    def test_discord_post_via_bot_token(self, mock_post):
+        import telegram_poster
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        original_webhook = telegram_poster.DISCORD_WEBHOOK_URL
+        original_token = telegram_poster.DISCORD_BOT_TOKEN
+        original_channel = telegram_poster.DISCORD_SCHEDULE_CHANNEL_ID
+        try:
+            telegram_poster.DISCORD_WEBHOOK_URL = ""
+            telegram_poster.DISCORD_BOT_TOKEN = "test_bot_token"
+            telegram_poster.DISCORD_SCHEDULE_CHANNEL_ID = "1522963317918793951"
+
+            res = telegram_poster.send_discord_message("Hello Discord")
+            self.assertTrue(res)
+            mock_post.assert_called_once()
+            call_url = mock_post.call_args[0][0]
+            call_headers = mock_post.call_args[1]["headers"]
+            call_json = mock_post.call_args[1]["json"]
+            self.assertEqual(call_url, "https://discord.com/api/v10/channels/1522963317918793951/messages")
+            self.assertEqual(call_headers["Authorization"], "Bot test_bot_token")
+            self.assertEqual(call_json["content"], "Hello Discord")
+        finally:
+            telegram_poster.DISCORD_WEBHOOK_URL = original_webhook
+            telegram_poster.DISCORD_BOT_TOKEN = original_token
+            telegram_poster.DISCORD_SCHEDULE_CHANNEL_ID = original_channel
+
+    @patch("telegram_poster.requests.post")
+    def test_discord_post_via_webhook(self, mock_post):
+        import telegram_poster
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        original_webhook = telegram_poster.DISCORD_WEBHOOK_URL
+        try:
+            telegram_poster.DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/test/url"
+
+            res = telegram_poster.send_discord_message("Hello Webhook")
+            self.assertTrue(res)
+            mock_post.assert_called_once()
+            call_url = mock_post.call_args[0][0]
+            call_json = mock_post.call_args[1]["json"]
+            self.assertTrue(call_url.startswith("https://discord.com/api/webhooks/test/url"))
+            self.assertEqual(call_json["content"], "Hello Webhook")
+        finally:
+            telegram_poster.DISCORD_WEBHOOK_URL = original_webhook
+
+    def test_discord_post_unconfigured(self):
+        import telegram_poster
+        original_webhook = telegram_poster.DISCORD_WEBHOOK_URL
+        original_token = telegram_poster.DISCORD_BOT_TOKEN
+        try:
+            telegram_poster.DISCORD_WEBHOOK_URL = ""
+            telegram_poster.DISCORD_BOT_TOKEN = ""
+            res = telegram_poster.send_discord_message("Hello")
+            self.assertFalse(res)
+        finally:
+            telegram_poster.DISCORD_WEBHOOK_URL = original_webhook
+            telegram_poster.DISCORD_BOT_TOKEN = original_token
 
 if __name__ == "__main__":
     unittest.main()
